@@ -1,0 +1,263 @@
+# === Step 0 — Install / import & GPU check (Colab) ===
+# (Colab already has TF; this simply imports required libs)
+import tensorflow as tf
+from tensorflow.keras import layers, models, callbacks, utils, optimizers
+import numpy as np
+import matplotlib.pyplot as plt
+import time
+import random
+import os
+seed = 42
+tf.random.set_seed(seed)
+np.random.seed(seed)
+random.seed(seed)
+
+print("TensorFlow version:", tf.__version__)
+print("GPU available:", tf.config.list_physical_devices('GPU'))
+
+
+
+# === Step 1 — Provide / Load data ===
+# For demonstration we use a short text (you can replace this with any text).
+text = (
+    "In machine learning, recurrent neural networks are a class of artificial neural networks "
+    "where connections between units form a directed cycle. This allows them to exhibit temporal dynamic behavior."
+    " RNNs are useful for sequence prediction problems such as text generation and time series forecasting."
+)
+
+# You can also read a .txt file from Google Drive if you prefer.
+# from google.colab import drive
+# drive.mount('/content/drive')
+# with open('/content/drive/MyDrive/myfile.txt','r') as f: text = f.read()
+
+print("Corpus length:", len(text))
+print(text[:200], "...")
+
+
+
+
+
+# === Step 2 — Preprocessing: build vocabulary, encode characters ===
+# Lowercase (optional) — keep punctuation to make it slightly harder
+text = text.lower()
+
+chars = sorted(list(set(text)))
+vocab_size = len(chars)
+print("Unique chars (vocab size):", vocab_size)
+char2idx = {c:i for i,c in enumerate(chars)}
+idx2char = {i:c for c,i in char2idx.items()}
+
+# helper to encode/decode
+def encode(s): return [char2idx[c] for c in s]
+def decode(indices): return ''.join(idx2char[i] for i in indices)
+
+
+
+
+# === Step 3 — Create sequences (sliding window) and labels ===
+seq_length = 40   # length of input sequence (you can tweak)
+step = 1          # stride
+sentences = []
+next_chars = []
+for i in range(0, len(text) - seq_length, step):
+    sentences.append(text[i: i + seq_length])
+    next_chars.append(text[i + seq_length])
+
+print("Number of sequences:", len(sentences))
+
+# One-hot encode as tensors
+X = np.zeros((len(sentences), seq_length, vocab_size), dtype=np.bool_)
+y = np.zeros((len(sentences), vocab_size), dtype=np.bool_)
+
+for i, sentence in enumerate(sentences):
+    for t, ch in enumerate(sentence):
+        X[i, t, char2idx[ch]] = 1
+    y[i, char2idx[next_chars[i]]] = 1
+
+# Train/val split
+split = int(0.9 * len(X))
+X_train, X_val = X[:split], X[split:]
+y_train, y_val = y[:split], y[split:]
+
+print("X_train shape:", X_train.shape, "y_train shape:", y_train.shape)
+
+
+
+
+# === Step 4 — Utility: training/evaluation helpers ===
+def build_vanilla_rnn(vocab_size, seq_length, rnn_units=128):
+    model = models.Sequential([
+        layers.Input(shape=(seq_length, vocab_size)),
+        layers.SimpleRNN(rnn_units, return_sequences=False),  # vanilla single-layer RNN
+        layers.Dense(vocab_size, activation='softmax')
+    ])
+    return model
+
+def build_deeper_rnn(vocab_size, seq_length, rnn_units=128, num_layers=3, dropout=0.2):
+    model = models.Sequential()
+    model.add(layers.Input(shape=(seq_length, vocab_size)))
+    # stacked SimpleRNNs: all intermediate layers return_sequences=True
+    for i in range(num_layers):
+        # last RNN should not return sequences
+        return_sequences = (i < num_layers - 1)
+        model.add(layers.SimpleRNN(rnn_units, return_sequences=return_sequences))
+        if dropout > 0:
+            model.add(layers.Dropout(dropout))
+    model.add(layers.Dense(vocab_size, activation='softmax'))
+    return model
+
+def compile_model(model, lr=0.001):
+    model.compile(
+        optimizer=optimizers.Adam(learning_rate=lr),
+        loss='categorical_crossentropy',
+        metrics=['accuracy']
+    )
+
+
+
+
+
+
+# Sampling: generate next characters given a seed string and a trained model
+def sample_next_chars(model, seed_text, n_chars=100, temperature=1.0):
+    """
+    temperature=1.0 default. Lower -> more conservative; higher -> more random
+    """
+    generated = seed_text
+    seed = seed_text[-seq_length:]
+    for _ in range(n_chars):
+        # one-hot encode seed
+        x_pred = np.zeros((1, seq_length, vocab_size))
+        for t, ch in enumerate(seed):
+            if ch in char2idx:
+                x_pred[0, t, char2idx[ch]] = 1
+        preds = model.predict(x_pred, verbose=0)[0]
+        # apply temperature
+        preds = np.log(np.maximum(preds, 1e-20)) / temperature
+        exp_preds = np.exp(preds)
+        preds = exp_preds / np.sum(exp_preds)
+        next_index = np.random.choice(range(vocab_size), p=preds)
+        next_char = idx2char[next_index]
+        generated += next_char
+        seed = (seed + next_char)[-seq_length:]
+    return generated
+
+
+
+
+
+# evaluation: compute simple next-char accuracy across validation set (greedy)
+def next_char_accuracy(model, X, y):
+    preds = model.predict(X, verbose=0)  # shape (N, vocab_size)
+    pred_idx = np.argmax(preds, axis=1)
+    true_idx = np.argmax(y, axis=1)
+    acc = np.mean(pred_idx == true_idx)
+    return acc
+
+
+
+
+
+# === Step 5 — Train Vanilla RNN ===
+rnn_units = 128
+vanilla = build_vanilla_rnn(vocab_size, seq_length, rnn_units=rnn_units)
+compile_model(vanilla, lr=0.001)
+vanilla.summary()
+
+# callbacks
+es = callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1)
+history_v = vanilla.fit(
+    X_train, y_train,
+    validation_data=(X_val, y_val),
+    batch_size=64,
+    epochs=50,
+    callbacks=[es],
+    verbose=2
+)
+
+
+
+# Plot training history (vanilla)
+plt.figure(figsize=(10,4))
+plt.subplot(1,2,1)
+plt.plot(history_v.history['loss'], label='train_loss')
+plt.plot(history_v.history['val_loss'], label='val_loss')
+plt.title('Vanilla RNN Loss'); plt.legend()
+plt.subplot(1,2,2)
+plt.plot(history_v.history['accuracy'], label='train_acc')
+plt.plot(history_v.history['val_accuracy'], label='val_acc')
+plt.title('Vanilla RNN Accuracy'); plt.legend()
+plt.tight_layout()
+
+
+
+
+
+# Evaluate vanilla model on validation set
+vanilla_val_acc = next_char_accuracy(vanilla, X_val, y_val)
+print(f"Vanilla RNN validation next-char accuracy: {vanilla_val_acc:.4f}")
+
+
+
+# Show a few sample generations from vanilla model
+seed_text = text[:seq_length]
+print("Seed:", repr(seed_text))
+print("\nVanilla RNN sample (temp=0.5):\n", sample_next_chars(vanilla, seed_text, n_chars=200, temperature=0.5))
+print("\nVanilla RNN sample (temp=1.2):\n", sample_next_chars(vanilla, seed_text, n_chars=200, temperature=1.2))
+
+
+
+
+# === Step 6 — Train Deeper RNN (stacked) ===
+deeper_units = 128
+num_layers = 3
+deeper = build_deeper_rnn(vocab_size, seq_length, rnn_units=deeper_units, num_layers=num_layers, dropout=0.2)
+compile_model(deeper, lr=0.001)
+deeper.summary()
+
+start = time.time()
+history_d = deeper.fit(
+    X_train, y_train,
+    validation_data=(X_val, y_val),
+    batch_size=64,
+    epochs=80,
+    callbacks=[es],
+    verbose=2
+)
+print("Training time (s):", time.time() - start)
+
+
+
+# Plot training history (deeper)
+plt.figure(figsize=(10,4))
+plt.subplot(1,2,1)
+plt.plot(history_d.history['loss'], label='train_loss')
+plt.plot(history_d.history['val_loss'], label='val_loss')
+plt.title('Deeper RNN Loss'); plt.legend()
+plt.subplot(1,2,2)
+plt.plot(history_d.history['accuracy'], label='train_acc')
+plt.plot(history_d.history['val_accuracy'], label='val_acc')
+plt.title('Deeper RNN Accuracy'); plt.legend()
+plt.tight_layout()
+
+
+
+
+
+# Evaluate deeper model
+deeper_val_acc = next_char_accuracy(deeper, X_val, y_val)
+print(f"Deeper RNN validation next-char accuracy: {deeper_val_acc:.4f}")
+
+# Samples
+print("\nDeeper RNN sample (temp=0.5):\n", sample_next_chars(deeper, seed_text, n_chars=200, temperature=0.5))
+print("\nDeeper RNN sample (temp=1.2):\n", sample_next_chars(deeper, seed_text, n_chars=200, temperature=1.2))
+
+
+
+
+# === Step 7 — Quick comparison summary ===
+print("=== Summary ===")
+print("Vanilla RNN params:", vanilla.count_params())
+print("Deeper RNN params:", deeper.count_params())
+print("Vanilla val accuracy:", vanilla_val_acc)
+print("Deeper val accuracy:", deeper_val_acc)
