@@ -1,0 +1,4 @@
+Image Classification using Basic CNN
+•	Build a simple CNN from scratch (Conv → ReLU → Pool → FC).
+•	Dataset: MNIST / CIFAR-10.
+•	Evaluate accuracy and confusion matrix
