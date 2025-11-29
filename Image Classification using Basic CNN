@@ -1,0 +1,206 @@
+# Step 0: Runtime check (Colab)
+import tensorflow as tf
+import numpy as np
+import random
+print("TensorFlow version:", tf.__version__)
+print("GPU available:", tf.test.is_gpu_available())  # may warn in TF2. Use tf.config.list_physical_devices('GPU') for newer TF
+print("GPUs:", tf.config.list_physical_devices('GPU'))
+# Seeds (best-effort reproducibility)
+SEED = 42
+np.random.seed(SEED)
+tf.random.set_seed(SEED)
+random.seed(SEED)
+
+
+# Step 1: Imports
+import numpy as np
+import matplotlib.pyplot as plt
+from tensorflow.keras import layers, models, utils, callbacks
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from sklearn.metrics import confusion_matrix, classification_report
+import seaborn as sns
+import itertools
+
+
+# Step 2: Load MNIST
+(x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+# Add channel dimension: (N, 28, 28, 1)
+x_train = x_train[..., np.newaxis]
+x_test  = x_test[..., np.newaxis]
+print("x_train shape:", x_train.shape, "y_train shape:", y_train.shape)
+print("x_test shape: ", x_test.shape, "y_test shape:", y_test.shape)
+num_classes = 10
+input_shape = x_train.shape[1:]
+print("Input shape:", input_shape)
+
+
+
+# Step 3: Preprocessing
+x_train = x_train.astype("float32") / 255.0
+x_test  = x_test.astype("float32") / 255.0
+
+y_train_cat = utils.to_categorical(y_train, num_classes)
+y_test_cat  = utils.to_categorical(y_test, num_classes)
+
+# Optional augmentation (set to True to use)
+use_augmentation = False
+if use_augmentation:
+    datagen = ImageDataGenerator(
+        rotation_range=10,
+        width_shift_range=0.08,
+        height_shift_range=0.08,
+        zoom_range=0.08
+    )
+    datagen.fit(x_train)
+else:
+    datagen = None
+
+# Visualize some training samples
+def show_samples(X, Y, n=6):
+    plt.figure(figsize=(12,2))
+    for i in range(n):
+        ax = plt.subplot(1, n, i+1)
+        plt.imshow(X[i].squeeze(), cmap='gray')
+        ax.set_title(str(Y[i]))
+        ax.axis('off')
+    plt.show()
+
+show_samples(x_train, y_train, n=6)
+
+
+
+# Step 4: Model definition
+def make_simple_mnist_cnn(input_shape, num_classes, dropout_rate=0.4):
+    model = models.Sequential(name="simple_mnist_cnn")
+    model.add(layers.Conv2D(32, (3,3), padding='same', activation='relu', input_shape=input_shape))
+    model.add(layers.MaxPooling2D((2,2)))
+    model.add(layers.Conv2D(64, (3,3), padding='same', activation='relu'))
+    model.add(layers.MaxPooling2D((2,2)))
+    # After two pools with 28x28 input -> spatial dims become small
+    model.add(layers.Flatten())
+    model.add(layers.Dense(128, activation='relu'))
+    model.add(layers.Dropout(dropout_rate))
+    model.add(layers.Dense(num_classes, activation='softmax'))
+    return model
+
+model = make_simple_mnist_cnn(input_shape, num_classes, dropout_rate=0.4)
+model.summary()
+
+
+
+# Step 5: Compile
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+              loss='categorical_crossentropy',
+              metrics=['accuracy'])
+
+
+
+
+# Step 6: Callbacks
+es = callbacks.EarlyStopping(monitor='val_accuracy', patience=6, restore_best_weights=True, verbose=1)
+ckpt_path = "/tmp/best_mnist_cnn.h5"
+mc = callbacks.ModelCheckpoint(ckpt_path, monitor='val_accuracy', save_best_only=True, verbose=1)
+
+
+
+
+# Step 7: Train
+batch_size = 128
+epochs = 20
+
+if datagen is None:
+    history = model.fit(x_train, y_train_cat,
+                        validation_split=0.1,
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        callbacks=[es, mc],
+                        verbose=2)
+else:
+    steps_per_epoch = len(x_train) // batch_size
+    history = model.fit(datagen.flow(x_train, y_train_cat, batch_size=batch_size),
+                        validation_data=(x_test, y_test_cat),
+                        epochs=epochs,
+                        steps_per_epoch=steps_per_epoch,
+                        callbacks=[es, mc],
+                        verbose=2)
+
+
+
+
+
+# Step 8: Evaluate
+test_loss, test_acc = model.evaluate(x_test, y_test_cat, verbose=2)
+print(f"Test accuracy: {test_acc:.4f}, Test loss: {test_loss:.4f}")
+
+
+
+
+
+# Step 9: Predictions & metrics
+y_pred_prob = model.predict(x_test)
+y_pred = np.argmax(y_pred_prob, axis=1)
+y_true = y_test.flatten() if y_test.ndim > 1 else y_test
+
+# Confusion matrix
+cm = confusion_matrix(y_true, y_pred)
+print("Confusion matrix shape:", cm.shape)
+
+# Plot functions
+def plot_confusion_matrix(cm, classes, normalize=False, title='Confusion matrix', figsize=(8,6)):
+    plt.figure(figsize=figsize)
+    if normalize:
+        cm = cm.astype('float') / (cm.sum(axis=1)[:, np.newaxis] + 1e-12)
+        fmt = ".2f"
+    else:
+        fmt = "d"
+    sns.heatmap(cm, annot=True, fmt=fmt, cmap='Blues', xticklabels=classes, yticklabels=classes)
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    plt.title(title)
+    plt.show()
+
+classes = [str(i) for i in range(10)]
+plot_confusion_matrix(cm, classes, normalize=False, title="MNIST Confusion Matrix (counts)")
+plot_confusion_matrix(cm, classes, normalize=True, title="MNIST Confusion Matrix (normalized)")
+
+# Classification report
+print("Classification report:\n")
+print(classification_report(y_true, y_pred, target_names=classes))
+
+
+
+
+
+# Step 10: Learning curves
+plt.figure(figsize=(12,4))
+plt.subplot(1,2,1)
+plt.plot(history.history['accuracy'], label='train_acc')
+plt.plot(history.history['val_accuracy'], label='val_acc')
+plt.title('Accuracy')
+plt.legend()
+plt.subplot(1,2,2)
+plt.plot(history.history['loss'], label='train_loss')
+plt.plot(history.history['val_loss'], label='val_loss')
+plt.title('Loss')
+plt.legend()
+plt.show()
+
+# Show a few misclassified examples
+def show_misclassified(X, y_true, y_pred, n=8):
+    mis_idx = np.where(y_true != y_pred)[0]
+    if len(mis_idx) == 0:
+        print("No misclassified examples.")
+        return
+    plt.figure(figsize=(12,3))
+    for i, idx in enumerate(mis_idx[:n]):
+        ax = plt.subplot(1, n, i+1)
+        plt.imshow(X[idx].squeeze(), cmap='gray')
+        ax.set_title(f"T:{y_true[idx]} P:{y_pred[idx]}")
+        ax.axis('off')
+    plt.show()
+
+show_misclassified(x_test, y_true, y_pred, n=8)
+
+
+
+
