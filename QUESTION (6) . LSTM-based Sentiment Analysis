@@ -1,0 +1,3 @@
+LSTM-based Sentiment Analysis
+•	Word embeddings (GloVe, Word2Vec).
+•	Compare LSTM vs BiLSTM
