@@ -1,0 +1,93 @@
+# =============================================================
+# STEP 1 — IMPORT LIBRARIES
+# =============================================================
+import time
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+# =============================================================
+# STEP 2 — LOAD MNIST DATASET
+# =============================================================
+(x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+
+# Reshape & normalize
+x_train = x_train.reshape(-1, 28, 28, 1) / 255.0
+x_test  = x_test.reshape(-1, 28, 28, 1) / 255.0
+
+# =============================================================
+# STEP 3 — FUNCTION TO BUILD CNN
+# =============================================================
+def build_cnn(kernel_size):
+    model = models.Sequential([
+        layers.Conv2D(32, kernel_size, activation='relu', input_shape=(28,28,1)),
+        layers.MaxPooling2D((2,2)),
+        layers.Flatten(),
+        layers.Dense(64, activation='relu'),
+        layers.Dense(10, activation='softmax')
+    ])
+
+    model.compile(optimizer='adam',
+                  loss='sparse_categorical_crossentropy',
+                  metrics=['accuracy'])
+
+    return model
+
+# =============================================================
+# STEP 4 — FUNCTION TO TRAIN & TEST MODEL
+# =============================================================
+def run_model(kernel_size):
+
+    print(f"\n==============================")
+    print(f" TRAINING MODEL: Filter = {kernel_size}")
+    print(f"==============================")
+
+    # 1) Build model
+    model = build_cnn(kernel_size)
+
+    # 2) Count parameters
+    params = model.count_params()
+    print("Total Parameters:", params)
+
+    # 3) Train model and measure time
+    t0 = time.time()
+    model.fit(x_train, y_train, epochs=3, batch_size=64, validation_split=0.1, verbose=1)
+    t1 = time.time()
+
+    train_time = t1 - t0
+    print(f"Training Time: {train_time:.2f} seconds")
+
+    # 4) Evaluate accuracy
+    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
+    print(f"Test Accuracy: {test_acc:.4f}")
+
+    # Return results
+    return {
+        "kernel": kernel_size,
+        "params": params,
+        "time": train_time,
+        "acc": test_acc
+    }
+
+# =============================================================
+# STEP 5 — RUN EXPERIMENT FOR 3 FILTER SIZES
+# =============================================================
+results = []
+
+results.append(run_model((3,3)))
+results.append(run_model((5,5)))
+results.append(run_model((7,7)))
+
+# =============================================================
+# STEP 6 — PRINT FINAL COMPARISON TABLE
+# =============================================================
+print("\n=======================================")
+print("       FINAL COMPARISON RESULTS")
+print("=======================================\n")
+
+for r in results:
+    print(f"Filter Size: {r['kernel']}")
+    print(f"Parameters : {r['params']}")
+    print(f"Train Time : {r['time']:.2f} sec")
+    print(f"Accuracy   : {r['acc']:.4f}")
+    print("---------------------------------------")
