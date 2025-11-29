@@ -1,0 +1,131 @@
+# ===================== LSTM vs BiLSTM Sentiment Analysis =====================
+
+# ---------------- STEP 1: IMPORTS ----------------
+import os
+import time
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from sklearn.metrics import confusion_matrix, classification_report
+import zipfile
+
+tf.random.set_seed(42)
+np.random.seed(42)
+
+# ---------------- STEP 2: SETTINGS ----------------
+TOP_WORDS = 20000
+MAX_LEN = 200
+EMBEDDING_DIM = 100
+RNN_UNITS = 128
+BATCH_SIZE = 64
+EPOCHS = 3
+
+# ---------------- STEP 3: LOAD IMDB DATA ----------------
+(x_train, y_train), (x_test, y_test) = tf.keras.datasets.imdb.load_data(num_words=TOP_WORDS)
+
+x_train = pad_sequences(x_train, maxlen=MAX_LEN, padding='post')
+x_test  = pad_sequences(x_test,  maxlen=MAX_LEN, padding='post')
+
+print("Train shape:", x_train.shape)
+print("Test shape:", x_test.shape)
+
+# ---------------- STEP 4: DOWNLOAD + LOAD GloVe ----------------
+GLOVE_FILE = f"glove.6B.{EMBEDDING_DIM}d.txt"
+
+if not os.path.exists(GLOVE_FILE):
+    print("Downloading GloVe...")
+    os.system("wget -q http://nlp.stanford.edu/data/glove.6B.zip -O glove.6B.zip")
+    with zipfile.ZipFile("glove.6B.zip", "r") as z:
+        z.extractall()
+    print("GloVe downloaded.")
+
+# Build embedding dict
+embeddings_index = {}
+with open(GLOVE_FILE, encoding="utf8") as f:
+    for line in f:
+        values = line.split()
+        word = values[0]
+        coefs = np.asarray(values[1:], dtype="float32")
+        embeddings_index[word] = coefs
+
+print("Loaded word vectors:", len(embeddings_index))
+
+# ---------------- STEP 5: CREATE EMBEDDING MATRIX ----------------
+word_index = tf.keras.datasets.imdb.get_word_index()
+embedding_matrix = np.random.normal(size=(TOP_WORDS, EMBEDDING_DIM)) * 0.01
+
+for word, idx in word_index.items():
+    if idx < TOP_WORDS:
+        vec = embeddings_index.get(word)
+        if vec is not None:
+            embedding_matrix[idx] = vec
+
+# ---------------- STEP 6: MODEL BUILDERS ----------------
+def build_lstm_model():
+    model = models.Sequential([
+        layers.Embedding(TOP_WORDS, EMBEDDING_DIM, input_length=MAX_LEN,
+                         weights=[embedding_matrix], trainable=False),
+        layers.LSTM(RNN_UNITS),
+        layers.Dense(1, activation="sigmoid")
+    ])
+    model.build((None, MAX_LEN))
+    model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+    return model
+
+
+def build_bilstm_model():
+    model = models.Sequential([
+        layers.Embedding(TOP_WORDS, EMBEDDING_DIM, input_length=MAX_LEN,
+                         weights=[embedding_matrix], trainable=False),
+        layers.Bidirectional(layers.LSTM(RNN_UNITS)),
+        layers.Dense(1, activation="sigmoid")
+    ])
+    model.build((None, MAX_LEN))
+    model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+    return model
+
+# ---------------- STEP 7: TRAIN & EVALUATE ----------------
+def train_and_evaluate(model_fn, model_name):
+    print("\n===========================")
+    print(f"Training {model_name}")
+    print("===========================")
+
+    model = model_fn()
+    print(model.summary())
+    print("Parameters:", model.count_params())
+
+    # FIXED TIMER
+    t0 = time.time()
+
+    history = model.fit(
+        x_train, y_train,
+        epochs=EPOCHS,
+        batch_size=BATCH_SIZE,
+        validation_split=0.1,
+        verbose=1
+    )
+
+    t1 = time.time()
+    train_time = t1 - t0
+    print(f"Training Time: {train_time:.2f} sec")
+
+    # Evaluate
+    loss, acc = model.evaluate(x_test, y_test, verbose=0)
+    print(f"Test Accuracy: {acc:.4f}")
+
+    # Confusion matrix
+    y_pred = (model.predict(x_test) >= 0.5).astype("int32")
+    cm = confusion_matrix(y_test, y_pred)
+    print("Confusion Matrix:\n", cm)
+
+    print("Classification Report:")
+    print(classification_report(y_test, y_pred, digits=4))
+
+    return model
+
+# ---------------- STEP 8: RUN EXPERIMENTS ----------------
+lstm_model = train_and_evaluate(build_lstm_model, "LSTM")
+bilstm_model = train_and_evaluate(build_bilstm_model, "BiLSTM")
+
+# ===================== END =====================
