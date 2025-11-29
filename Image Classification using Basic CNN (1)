@@ -1,0 +1,65 @@
+import tensorflow as tf
+from tensorflow.keras import layers, models
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import numpy as np
+
+
+mnist = tf.keras.datasets.mnist
+(X_train, y_train), (X_test, y_test) = mnist.load_data()
+
+
+X_train = X_train.reshape(-1, 28, 28, 1) / 255.0
+X_test  = X_test.reshape(-1, 28, 28, 1) / 255.0
+
+
+model = models.Sequential([
+
+    # Convolution layer
+    layers.Conv2D(32, (3,3), activation='relu', input_shape=(28,28,1)),
+
+    # Max pooling layer
+    layers.MaxPooling2D((2, 2)),
+
+    # 2nd convolution layer (optional)
+    layers.Conv2D(64, (3,3), activation='relu'),
+    layers.MaxPooling2D((2,2)),
+
+    # Flatten → Fully Connected (Dense)
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+
+    # Output layer for 10 classes
+    layers.Dense(10, activation='softmax')
+])
+
+# Print summary
+model.summary()
+
+
+
+
+model.compile(optimizer='adam',
+              loss='sparse_categorical_crossentropy',
+              metrics=['accuracy'])
+
+
+
+
+
+history = model.fit(X_train, y_train, epochs=5, validation_split=0.1)
+
+
+
+test_loss, test_acc = model.evaluate(X_test, y_test)
+print("Test Accuracy =", test_acc)
+
+
+y_pred = np.argmax(model.predict(X_test), axis=1)
+
+cm = confusion_matrix(y_test, y_pred)
+
+disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+disp.plot(cmap="Blues", values_format="d")
+plt.title("Confusion Matrix")
+plt.show()
