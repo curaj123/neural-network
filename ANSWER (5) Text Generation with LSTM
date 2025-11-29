@@ -1,0 +1,190 @@
+# ====== Text Generation with LSTM — Step by step (easy & understandable) ======
+# Run this whole cell/script at once. Replace `raw_text` with your poetry/lyrics/headlines file.
+
+# 1) IMPORTS & SEED
+import io
+import time
+import random
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models, preprocessing
+
+tf.random.set_seed(42)
+np.random.seed(42)
+random.seed(42)
+
+# 2) DATA: small example corpus (replace with your own text for better results)
+# You can paste a large poem/lyrics or load from file:
+# with open("my_poems.txt", "r", encoding="utf-8") as f: raw_text = f.read().lower()
+raw_text = """
+shall i compare thee to a summer's day?
+thou art more lovely and more temperate:
+rough winds do shake the darling buds of may,
+and summer's lease hath all too short a date;
+"""
+
+# normalize
+raw_text = raw_text.lower()
+print("Corpus length (chars):", len(raw_text))
+print("Sample:\n", raw_text[:200])
+
+# 3) TOKENIZATION (character-level or word-level)
+# Choose mode = "char" for character-level generation, or "word" for word-level generation.
+mode = "char"   # change to "word" if you prefer word-level modeling
+
+if mode == "char":
+    # Character-level tokenization: map each unique character to an integer
+    chars = sorted(list(set(raw_text)))
+    stoi = {c:i for i,c in enumerate(chars)}
+    itos = {i:c for c,i in stoi.items()}
+    vocab_size = len(chars)
+    print("Character vocab size:", vocab_size)
+
+    # Encode entire text as integers
+    encoded = np.array([stoi[c] for c in raw_text], dtype=np.int32)
+
+    # Create input sequences and targets (predict next char)
+    seq_length = 40   # length of input sequence (tuneable)
+    step = 1
+    sequences = []
+    next_chars = []
+    for i in range(0, len(encoded) - seq_length, step):
+        sequences.append(encoded[i:i+seq_length])
+        next_chars.append(encoded[i+seq_length])
+    X = np.array(sequences)
+    y = np.array(next_chars)
+
+    # For Keras embedding + LSTM we will use integer sequences; outputs are sparse integers
+
+else:
+    # Word-level tokenization
+    tokenizer = preprocessing.text.Tokenizer(oov_token="<OOV>")
+    tokenizer.fit_on_texts([raw_text])
+    total_words = len(tokenizer.word_index) + 1
+    print("Word vocab size:", total_words)
+
+    # Create sequences using Keras text_to_sequences
+    tokens = tokenizer.texts_to_sequences([raw_text])[0]
+    seq_length = 10
+    sequences = []
+    for i in range(seq_length, len(tokens)):
+        seq = tokens[i-seq_length:i+1]  # input seq + target
+        sequences.append(seq)
+    sequences = np.array(sequences)
+    X = sequences[:, :-1]
+    y = sequences[:, -1]
+    vocab_size = total_words
+
+# Show dataset size
+print("Number of sequences:", X.shape[0])
+
+# 4) BUILD THE LSTM MODEL
+embedding_dim = 64   # for word-level or char-level embedding size
+rnn_units = 128
+
+def build_model(vocab_size, embedding_dim, seq_length, rnn_units):
+    """
+    Simple LSTM:
+      Input (seq_length) -> Embedding -> LSTM -> Dense(vocab_size, softmax)
+    For char-level vocab_size is small; for word-level vocab_size may be large.
+    """
+    model = models.Sequential([
+        layers.Input(shape=(seq_length,)),
+        layers.Embedding(input_dim=vocab_size, output_dim=embedding_dim, input_length=seq_length),
+        layers.LSTM(rnn_units),
+        layers.Dense(vocab_size, activation='softmax')
+    ])
+    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    return model
+
+model = build_model(vocab_size=vocab_size, embedding_dim=embedding_dim,
+                    seq_length=seq_length, rnn_units=rnn_units)
+model.summary()
+print("Total params:", model.count_params())
+
+# 5) TRAIN THE MODEL (small epochs to demo; increase for real use)
+EPOCHS = 30   # increase to 50+ for better samples (or when using larger corpus)
+BATCH_SIZE = 32
+
+t0 = time.time()
+history = model.fit(X, y, epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)
+t1 = time.time()
+print(f"Training completed in {(t1-t0):.1f} sec")
+
+# 6) SAMPLING FUNCTION (temperature sampling)
+def sample_with_temperature(preds, temperature=1.0):
+    """
+    preds: 1D np.array of predicted probabilities
+    temperature: float > 0. Lower = more conservative, higher = more random
+    """
+    preds = np.asarray(preds).astype('float64')
+    preds = np.log(preds + 1e-9) / temperature
+    exp_preds = np.exp(preds)
+    preds = exp_preds / np.sum(exp_preds)
+    probas = np.random.multinomial(1, preds, 1)
+    return np.argmax(probas)
+
+# 7) TEXT GENERATION FUNCTION
+def generate_text(model, seed_text, gen_length=200, temperature=1.0, mode="char"):
+    """
+    model: trained Keras model
+    seed_text: initial prompt string (must be at least seq_length long for char mode)
+    gen_length: number of characters/words to generate
+    temperature: sampling temperature
+    mode: "char" or "word"
+    """
+    generated = seed_text
+    if mode == "char":
+        seq = [stoi.get(c, 0) for c in seed_text[-seq_length:]]  # last seq_length chars
+        for _ in range(gen_length):
+            x = np.array(seq).reshape(1, -1)
+            preds = model.predict(x, verbose=0)[0]   # prob over vocab
+            next_idx = sample_with_temperature(preds, temperature)
+            next_char = itos[next_idx]
+            generated += next_char
+            seq = seq[1:] + [next_idx]
+    else:
+        # word-level generation: seed_text is words; we use tokenizer
+        seed_tokens = preprocessing.text.text_to_word_sequence(seed_text)
+        seed_ids = [tokenizer.word_index.get(w, tokenizer.word_index.get("<OOV>")) for w in seed_tokens]
+        seq = seed_ids[-seq_length:]
+        for _ in range(gen_length):
+            x = np.array([seq])
+            preds = model.predict(x, verbose=0)[0]
+            next_id = sample_with_temperature(preds, temperature)
+            next_word = tokenizer.index_word.get(next_id, "<OOV>")
+            generated += " " + next_word
+            seq = seq[1:] + [next_id]
+    return generated
+
+# 8) TRY GENERATING FROM DIFFERENT SEEDS & TEMPERATURES
+print("\n=== Generated Samples ===\n")
+
+# For char-mode, pick a seed string of length >= seq_length (or pad/truncate)
+if mode == "char":
+    # If seed is short, we pad with spaces from the left
+    seed = "shall i compare thee to a summer's day?"
+    seed = seed[-seq_length:].rjust(seq_length)   # ensure length
+    for temp in [0.2, 0.6, 1.0]:
+        print(f"--- temp={temp} ---")
+        print(generate_text(model, seed_text=seed, gen_length=300, temperature=temp, mode="char"))
+        print()
+else:
+    seed = "shall i compare thee"
+    for temp in [0.5, 1.0]:
+        print(f"--- temp={temp} ---")
+        print(generate_text(model, seed_text=seed, gen_length=50, temperature=temp, mode="word"))
+        print()
+
+# 9) SAVE MODEL (optional)
+# model.save("lstm_text_gen.h5")
+# To load later: model = tf.keras.models.load_model("lstm_text_gen.h5")
+
+# ===== Notes / Tips =====
+# - Replace `raw_text` with a large corpus for much better generation (e.g., many poems or song lyrics).
+# - For word-level modeling, you'll likely need a much larger corpus and higher vocab cap and epochs.
+# - Increase EPOCHS and/or LSTM units for better quality; use GPU if available.
+# - Try different 'temperature' values:
+#     low (0.2) -> conservative / repetitive
+#     medium (0.6) -> balanced
+#     high (1.0+) -> creative but may be noisy
