@@ -1,0 +1,3 @@
+Sentiment Analysis Using RNN
+•	Dataset: IMDB / Twitter Sentiment.
+•	Use simple RNN and compare with LSTM, GRU.
