@@ -1,0 +1,3 @@
+Experimenting with Different Convolutional Filters
+•	Try 3×3 vs 5×5 vs 7×7 filters.
+•	Compare accuracy, training time, and parameter coun
